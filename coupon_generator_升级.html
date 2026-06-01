@@ -1,0 +1,1781 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Amazon 优惠券生成及报错处理器</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Inter+Tight:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root{
+    --bg:            #F6F4EF;
+    --bg-card:       #FFFFFF;
+    --bg-sub:        #FBFAF6;
+    --ink:           #111111;
+    --ink-soft:      #3A3A3A;
+    --muted:         #8B8479;
+    --line:          #E6E1D6;
+    --line-strong:   #CFC7B5;
+    --accent:        #1A1A1A;
+    --accent-warm:   #B9541A;
+    --success:       #2F6B3E;
+    --danger:        #A23A2A;
+    --warn:          #8A6A00;
+    --info-bg:       #F3EFE5;
+    --shadow-soft:   0 1px 2px rgba(17,17,17,.04), 0 8px 24px rgba(17,17,17,.06);
+    --radius:        14px;
+    --radius-sm:     8px;
+    --serif:         'Fraunces', 'Noto Serif SC', Georgia, serif;
+    --sans:          'Inter Tight', 'PingFang SC', 'Hiragino Sans GB', system-ui, sans-serif;
+    --mono:          'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  *{ box-sizing:border-box; }
+  html, body{
+    margin:0; padding:0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* grain texture overlay for atmosphere */
+  body::before{
+    content:'';
+    position: fixed; inset:0;
+    pointer-events:none;
+    z-index: 0;
+    opacity:.4;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.07 0 0 0 0 0.07 0 0 0 0 0.07 0 0 0 0.05 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+
+  .shell{
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 48px 40px 120px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ---- Masthead ---- */
+  .masthead{
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    border-bottom: 1px solid var(--line-strong);
+    padding-bottom: 22px;
+    margin-bottom: 36px;
+  }
+  .masthead .brand{
+    display:flex; flex-direction:column; gap:6px;
+  }
+  .eyebrow{
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .title{
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 40px;
+    line-height: 1.05;
+    letter-spacing: -.01em;
+    color: var(--ink);
+  }
+  .title em{
+    font-style: italic;
+    font-weight: 400;
+    color: var(--accent-warm);
+  }
+  .masthead-meta{
+    text-align:right;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: .08em;
+  }
+  .masthead-meta .ed{ color: var(--ink); font-weight:500; }
+
+  /* ---- Tabs ---- */
+  .tabs{
+    display:flex;
+    gap: 4px;
+    margin-bottom: 28px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tab{
+    background: transparent;
+    border: 0;
+    padding: 12px 20px;
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color .15s ease, border-color .15s ease;
+    display:flex; align-items:center; gap:10px;
+  }
+  .tab .num{
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 6px;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    color: var(--muted);
+  }
+  .tab:hover{ color: var(--ink); }
+  .tab.active{
+    color: var(--ink);
+    border-bottom-color: var(--accent);
+  }
+  .tab.active .num{
+    border-color: var(--ink);
+    color: var(--ink);
+    background: var(--bg);
+  }
+
+  /* ---- Card ---- */
+  .card{
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 32px 36px;
+    box-shadow: var(--shadow-soft);
+    margin-bottom: 22px;
+  }
+  .card-head{
+    display:flex; align-items:baseline; justify-content:space-between;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 18px;
+    margin-bottom: 24px;
+  }
+  .card-head h2{
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 22px;
+    margin: 0;
+    letter-spacing: -.005em;
+  }
+  .card-head .hint{
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: .06em;
+  }
+
+  /* ---- Form grid ---- */
+  .grid{
+    display:grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 22px 28px;
+  }
+  .grid .full{ grid-column: 1 / -1; }
+
+  .field{
+    display:flex; flex-direction:column; gap:8px;
+  }
+  .field label{
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: .01em;
+    display:flex; align-items:center; gap:8px;
+  }
+  .field label .req{
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--ink);
+    color: #fff;
+    letter-spacing: .1em;
+  }
+  .field .help{
+    font-size: 11.5px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .input, .select, .textarea{
+    width: 100%;
+    border: 1px solid var(--line-strong);
+    background: var(--bg-card);
+    padding: 10px 12px;
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--ink);
+    border-radius: var(--radius-sm);
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .input:focus, .select:focus, .textarea:focus{
+    outline: none;
+    border-color: var(--ink);
+    box-shadow: 0 0 0 3px rgba(17,17,17,.06);
+  }
+  .select{
+    appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='none' stroke='%23111' stroke-width='1.4' d='M1 1l4 4 4-4'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 32px;
+  }
+
+  .input-row{
+    display:flex; gap:8px; align-items:stretch;
+  }
+  .input-row .input, .input-row .select{ flex:1; }
+  .btn-ghost{
+    border: 1px solid var(--line-strong);
+    background: var(--bg-sub);
+    padding: 0 14px;
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s ease, border-color .15s ease;
+  }
+  .btn-ghost:hover{ background: var(--bg); border-color: var(--ink); }
+
+  /* radio group pill style */
+  .pillgroup{
+    display:flex;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--bg-sub);
+  }
+  .pillgroup label{
+    flex:1;
+    text-align:center;
+    padding: 10px 12px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--ink-soft);
+    cursor: pointer;
+    border-right: 1px solid var(--line-strong);
+    transition: background .15s ease, color .15s ease;
+    position: relative;
+  }
+  .pillgroup label:last-child{ border-right: 0; }
+  .pillgroup input[type=radio]{ display:none; }
+  .pillgroup input[type=radio]:checked + span{
+    color: #fff;
+  }
+  .pillgroup label:has(input:checked){
+    background: var(--ink);
+    color: #fff;
+  }
+
+  /* file drop zone */
+  .drop{
+    border: 1.5px dashed var(--line-strong);
+    background: var(--bg-sub);
+    border-radius: var(--radius-sm);
+    padding: 22px 18px;
+    text-align:center;
+    transition: border-color .15s ease, background .15s ease;
+    cursor: pointer;
+  }
+  .drop:hover{ border-color: var(--ink); background: var(--bg); }
+  .drop.has-file{ border-color: var(--success); background: #F4F8F2; }
+  .drop .drop-title{
+    font-size: 13px; font-weight: 600; color: var(--ink);
+    margin-bottom: 4px;
+  }
+  .drop .drop-sub{
+    font-size: 11.5px; color: var(--muted);
+    font-family: var(--mono);
+  }
+  .drop input[type=file]{ display:none; }
+
+  /* primary action bar */
+  .action-bar{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap: 16px;
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+  }
+  .btn-primary{
+    background: var(--ink);
+    color: #fff;
+    border: 0;
+    padding: 13px 26px;
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background .15s ease, transform .1s ease;
+    display:inline-flex; align-items:center; gap:10px;
+  }
+  .btn-primary:hover:not(:disabled){ background: var(--accent-warm); }
+  .btn-primary:active{ transform: translateY(1px); }
+  .btn-primary:disabled{ background: var(--muted); cursor: not-allowed; opacity:.6; }
+  .btn-primary .arr{
+    font-family: var(--serif); font-style: italic; font-size: 16px;
+    transition: transform .2s ease;
+  }
+  .btn-primary:hover:not(:disabled) .arr{ transform: translateX(3px); }
+
+  .btn-secondary{
+    background: var(--bg-card);
+    color: var(--ink);
+    border: 1px solid var(--line-strong);
+    padding: 13px 22px;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .btn-secondary:hover{ border-color: var(--ink); }
+
+  /* ---- Summary / Result panel ---- */
+  .panel{
+    margin-top: 22px;
+    background: var(--bg-card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: none;
+  }
+  .panel.show{ display: block; animation: fadeUp .3s ease; }
+  @keyframes fadeUp{
+    from{ opacity:0; transform: translateY(6px); }
+    to{ opacity:1; transform: translateY(0); }
+  }
+  .panel-head{
+    padding: 18px 28px;
+    border-bottom: 1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between;
+    background: var(--info-bg);
+  }
+  .panel-head h3{
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 18px;
+    margin: 0;
+  }
+  .panel-head .tag{
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .14em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .panel-body{ padding: 24px 28px; }
+  .stats{
+    display:grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+    margin-bottom: 18px;
+  }
+  .stat{
+    border-left: 2px solid var(--line-strong);
+    padding: 2px 0 2px 14px;
+  }
+  .stat .k{
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .stat .v{
+    font-family: var(--serif);
+    font-size: 26px;
+    font-weight: 500;
+    color: var(--ink);
+    letter-spacing: -.01em;
+  }
+  .stat .v .unit{
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+    margin-left: 4px;
+  }
+
+  .meta-list{
+    display:grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px 28px;
+    font-size: 12.5px;
+  }
+  .meta-list .row{
+    display:flex; justify-content:space-between;
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--line);
+  }
+  .meta-list .row:last-child{ border-bottom: 0; }
+  .meta-list .row .k{ color: var(--muted); }
+  .meta-list .row .v{ color: var(--ink); font-weight: 500; font-family: var(--mono); font-size: 12px; }
+
+  .download-strip{
+    margin-top: 20px;
+    padding: 16px 18px;
+    background: var(--info-bg);
+    border-radius: var(--radius-sm);
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .download-strip .fname{
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--ink);
+  }
+
+  /* ---- Error handler coupon list ---- */
+  .coupon-list{
+    display:flex; flex-direction:column;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    margin-top: 18px;
+  }
+  .coupon-list .row{
+    display:grid;
+    grid-template-columns: 2.4fr 1fr 1fr 2fr;
+    gap: 14px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    align-items:center;
+    transition: background .15s ease;
+  }
+  .coupon-list .row:last-child{ border-bottom: 0; }
+  .coupon-list .row.head{
+    background: var(--bg-sub);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .coupon-list .row:not(.head):hover{ background: var(--bg-sub); }
+  .coupon-list .name{ font-weight: 500; font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .coupon-list .count{ font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+  .coupon-list .count.err{ color: var(--danger); font-weight: 600; }
+  .coupon-list .errs{ display:flex; flex-wrap: wrap; gap: 5px; }
+  .coupon-list .errtag{
+    font-family: var(--sans);
+    font-size: 11px;
+    background: #FBEAE5;
+    color: var(--danger);
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid #F2D4CC;
+  }
+  .coupon-list .errtag .n{ font-weight: 700; margin-left: 4px; }
+  .coupon-list .errtag.none{
+    background: #EAF3EC; color: var(--success); border-color: #CFE4D4;
+  }
+
+  /* ---- Toast / alert ---- */
+  .notice{
+    padding: 12px 16px;
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+    display:flex; align-items:flex-start; gap: 10px;
+    margin-bottom: 16px;
+  }
+  .notice.info{ background: var(--info-bg); color: var(--ink-soft); border: 1px solid var(--line-strong); }
+  .notice.warn{ background: #FAF3DE; color: #6A5200; border: 1px solid #E6D596; }
+  .notice.error{ background: #FBEAE5; color: var(--danger); border: 1px solid #F2D4CC; }
+  .notice.success{ background: #EAF3EC; color: var(--success); border: 1px solid #CFE4D4; }
+  .notice .dot{
+    width: 6px; height: 6px; border-radius: 50%;
+    margin-top: 6px; flex-shrink: 0;
+  }
+  .notice.info .dot{ background: var(--muted); }
+  .notice.warn .dot{ background: var(--warn); }
+  .notice.error .dot{ background: var(--danger); }
+  .notice.success .dot{ background: var(--success); }
+
+  /* spinner */
+  .spinner{
+    display:inline-block;
+    width: 12px; height: 12px;
+    border: 2px solid rgba(255,255,255,.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+
+  /* hide by default */
+  .hidden{ display: none !important; }
+
+  /* page body hidden until active */
+  .page{ display: none; }
+  .page.active{ display: block; animation: fadeUp .25s ease; }
+
+  /* footer */
+  footer{
+    margin-top: 80px;
+    padding-top: 28px;
+    border-top: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--muted);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    display:flex; justify-content:space-between;
+  }
+
+  /* small screens */
+  @media (max-width: 760px){
+    .shell{ padding: 32px 20px 80px; }
+    .title{ font-size: 30px; }
+    .grid{ grid-template-columns: 1fr; gap: 18px; }
+    .stats{ grid-template-columns: repeat(2, 1fr); }
+    .coupon-list .row{ grid-template-columns: 1fr; }
+    .masthead{ flex-direction: column; align-items: flex-start; gap: 12px; }
+    .masthead-meta{ text-align: left; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Masthead -->
+  <header class="masthead">
+    <div class="brand">
+      <div class="eyebrow">Amazon · Seller Tools</div>
+      <h1 class="title">优惠券 <em>生成</em> 及报错处理器</h1>
+    </div>
+    <div class="masthead-meta">
+      <div class="ed">Edition 02</div>
+      <div>SPC · Coupon Batch</div>
+    </div>
+  </header>
+
+  <!-- Tabs -->
+  <nav class="tabs">
+    <button class="tab active" data-target="page-generate">
+      <span class="num">01</span>
+      <span>生成优惠券</span>
+    </button>
+    <button class="tab" data-target="page-error">
+      <span class="num">02</span>
+      <span>报错处理</span>
+    </button>
+  </nav>
+
+  <!-- ============================================= -->
+  <!--         PAGE 1: GENERATE COUPONS              -->
+  <!-- ============================================= -->
+  <section id="page-generate" class="page active">
+
+    <div class="card">
+      <div class="card-head">
+        <h2>配置</h2>
+        <div class="hint">CONFIGURATION · 全部字段已预填默认值</div>
+      </div>
+
+      <div class="grid">
+
+        <!-- Account selector: site + ID, all regions in one dropdown -->
+        <div class="field">
+          <label>账号 <span class="req">必填</span></label>
+          <div class="input-row">
+            <select id="f-account-site" class="select" style="flex:1.8;">
+              <optgroup label="🌎 北美">
+                <option value="Amazon.com"    data-region="NA">Amazon.com（美国）</option>
+                <option value="Amazon.ca"     data-region="NA">Amazon.ca（加拿大）</option>
+                <option value="Amazon.com.mx" data-region="NA">Amazon.com.mx（墨西哥）</option>
+                <option value="Amazon.com.br" data-region="NA">Amazon.com.br（巴西）</option>
+              </optgroup>
+              <optgroup label="🌍 欧洲">
+                <option value="Amazon.co.uk"  data-region="EU">Amazon.co.uk（英国）</option>
+                <option value="Amazon.com.be" data-region="EU">Amazon.com.be（比利时）</option>
+                <option value="Amazon.de"     data-region="EU">Amazon.de（德国）</option>
+                <option value="Amazon.es"     data-region="EU">Amazon.es（西班牙）</option>
+                <option value="Amazon.fr"     data-region="EU">Amazon.fr（法国）</option>
+                <option value="Amazon.it"     data-region="EU">Amazon.it（意大利）</option>
+                <option value="Amazon.nl"     data-region="EU">Amazon.nl（荷兰）</option>
+                <option value="Amazon.pl"     data-region="EU">Amazon.pl（波兰）</option>
+                <option value="Amazon.se"     data-region="EU">Amazon.se（瑞典）</option>
+              </optgroup>
+            </select>
+            <input id="f-account-id" class="input" type="text" value="101" style="max-width:86px;" placeholder="账号数字" />
+          </div>
+          <div class="help">站点自动识别北美/欧洲，欧洲站使用欧洲模板及 MET/MEST 时间格式。</div>
+        </div>
+
+        <!-- Data source type -->
+        <div class="field">
+          <label>数据源</label>
+          <div class="pillgroup" id="f-source-type">
+            <label><input type="radio" name="source" value="report" checked><span>在售报告</span></label>
+            <label><input type="radio" name="source" value="custom"><span>自定义 ASIN</span></label>
+          </div>
+          <div class="help" id="source-help">上传亚马逊后台下载的在售商品报告（.txt）。系统会自动剔除父体 ASIN（seller-sku 前两位 01–09）。</div>
+        </div>
+
+        <!-- File upload -->
+        <div class="field full">
+          <label>上传数据文件 <span class="req">必填</span></label>
+          <div class="drop" id="drop-source">
+            <input type="file" id="file-source" />
+            <div class="drop-title" id="drop-source-title">点击或拖拽文件到此处</div>
+            <div class="drop-sub" id="drop-source-sub">支持 .txt （在售报告）</div>
+          </div>
+          <div class="help" id="custom-tip" style="display:none;">
+            <a href="#" id="download-tpl" style="color:var(--accent-warm);text-decoration:underline;">下载 ASIN 模板</a> · 填入 ASIN 后上传 .xlsx 文件
+          </div>
+        </div>
+
+        <!-- Time range (report only) -->
+        <div class="field" id="time-range-field">
+          <label>时间范围</label>
+          <div style="display:flex; gap:8px; align-items:stretch; flex-wrap:wrap;">
+            <select id="f-months" class="select" style="flex:1; min-width:140px;">
+              <option value="all">全部数据</option>
+              <option value="1">最近 1 个月</option>
+              <option value="2">最近 2 个月</option>
+              <option value="3">最近 3 个月</option>
+              <option value="4">最近 4 个月</option>
+              <option value="5">最近 5 个月</option>
+              <option value="6">最近 6 个月</option>
+              <option value="custom">自定义区间…</option>
+            </select>
+          </div>
+          <!-- 自定义日期区间（仅 custom 时显示） -->
+          <div id="custom-date-range" style="display:none; margin-top:10px; grid-column: 1 / -1;">
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <div style="display:flex; align-items:center; gap:6px; flex:1; min-width:160px;">
+                <span style="font-size:12px; color:var(--muted); white-space:nowrap;">从</span>
+                <input id="f-date-from" class="input" type="date" style="flex:1;" />
+              </div>
+              <div style="display:flex; align-items:center; gap:6px; flex:1; min-width:160px;">
+                <span style="font-size:12px; color:var(--muted); white-space:nowrap;">至</span>
+                <input id="f-date-to" class="input" type="date" style="flex:1;" />
+              </div>
+              <button class="btn-ghost" id="btn-apply-daterange" type="button" style="white-space:nowrap;">应用</button>
+            </div>
+          </div>
+          <div class="help" id="time-range-help">按 open-date 字段筛选（仅对在售报告生效）。</div>
+        </div>
+
+        <!-- Capacity -->
+        <div class="field">
+          <label>优惠券容量</label>
+          <input id="f-capacity" class="input" type="number" min="15" max="2900" value="1000" />
+          <div class="help">每张优惠券允许的 ASIN 数量（15–2900，默认 1000）。</div>
+        </div>
+
+        <!-- Discount type -->
+        <div class="field">
+          <label>折扣类型</label>
+          <select id="f-disc-type" class="select">
+            <option value="折扣" selected>折扣（百分比 %）</option>
+            <option value="减免金额 ($)">减免金额（$）</option>
+          </select>
+        </div>
+
+        <!-- Discount value -->
+        <div class="field">
+          <label>折扣值</label>
+          <div class="input-row">
+            <input id="f-disc-value" class="input" type="number" value="5" min="1" />
+            <span class="btn-ghost" id="disc-unit" style="cursor:default;pointer-events:none;">%</span>
+          </div>
+          <div class="help" id="disc-help">百分比：5–50 之间整数。</div>
+        </div>
+
+        <!-- Coupon name -->
+        <div class="field full">
+          <label>优惠券名称（买家可见）</label>
+          <div class="input-row">
+            <input id="f-name" class="input" type="text" maxlength="80" placeholder="留空将随机生成" />
+            <button class="btn-ghost" id="btn-gen-name" type="button">随机生成</button>
+          </div>
+          <div class="help">最多 80 字符。默认随机生成；亚马逊会自动加上折扣前缀（如 "优惠 10%"）。</div>
+        </div>
+
+        <!-- Budget -->
+        <div class="field">
+          <label id="budget-label">预算 (USD)</label>
+          <input id="f-budget" class="input" type="number" min="100" value="100" />
+          <div class="help" id="budget-help">最低 $100。</div>
+        </div>
+
+        <!-- Start date -->
+        <div class="field">
+          <label>开始日期</label>
+          <input id="f-start" class="input" type="date" />
+          <div class="help">YYYY-MM-DD，默认明天。需在未来 3 个月内。</div>
+        </div>
+
+        <!-- End date -->
+        <div class="field">
+          <label>结束日期</label>
+          <input id="f-end" class="input" type="date" />
+          <div class="help">默认开始日期 +30 天。</div>
+        </div>
+
+        <!-- limit per buyer -->
+        <div class="field">
+          <label>限制每位买家只能兑换一次</label>
+          <select id="f-limit-once" class="select">
+            <option value="是" selected>是</option>
+            <option value="否">否</option>
+          </select>
+        </div>
+
+        <!-- coupon type -->
+        <div class="field">
+          <label>优惠券类型</label>
+          <select id="f-coupon-type" class="select">
+            <option value="标准" selected>标准</option>
+            <option value="订购省">订购省</option>
+            <option value="重新下单优惠券">重新下单优惠券</option>
+          </select>
+        </div>
+
+        <!-- audience -->
+        <div class="field">
+          <label>目标群体</label>
+          <select id="f-audience" class="select">
+            <option value="所有买家" selected>所有买家</option>
+            <option value="亚马逊 Prime 会员">亚马逊 Prime 会员</option>
+          </select>
+        </div>
+
+        <!-- stacking -->
+        <div class="field">
+          <label>叠加使用的促销</label>
+          <select id="f-stack" class="select">
+            <option value="否" selected>否</option>
+            <option value="是">是</option>
+          </select>
+        </div>
+
+      </div><!-- /grid -->
+
+      <div class="action-bar">
+        <div class="help" id="status-hint" style="color:var(--muted); font-size:12px;">准备就绪。</div>
+        <button class="btn-primary" id="btn-generate" type="button">
+          <span>生成优惠券</span>
+          <span class="arr">→</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Result panel -->
+    <div class="panel" id="result-panel">
+      <div class="panel-head">
+        <h3>生成结果</h3>
+        <div class="tag">Summary</div>
+      </div>
+      <div class="panel-body">
+        <div class="stats" id="result-stats"></div>
+        <div class="meta-list" id="result-meta"></div>
+        <div class="download-strip">
+          <div class="fname" id="result-fname">—</div>
+          <button class="btn-primary" id="btn-download" type="button">
+            <span>下载文件</span>
+            <span class="arr">↓</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ============================================= -->
+  <!--            PAGE 2: ERROR HANDLER              -->
+  <!-- ============================================= -->
+  <section id="page-error" class="page">
+
+    <div class="card">
+      <div class="card-head">
+        <h2>上传报错文件</h2>
+        <div class="hint">STEP 01 · ERROR FILE</div>
+      </div>
+
+      <div class="notice info">
+        <span class="dot"></span>
+        <div>
+          上传亚马逊返回的报错优惠券模板（.xlsx）。系统会读取每行 <b>"错误"</b> 列批注中标注的 ASIN 及原因，汇总后可一键剔除并重新生成。
+        </div>
+      </div>
+
+      <div class="field full">
+        <div class="drop" id="drop-error">
+          <input type="file" id="file-error" accept=".xlsx" />
+          <div class="drop-title" id="drop-error-title">点击或拖拽报错文件到此处</div>
+          <div class="drop-sub" id="drop-error-sub">仅支持 .xlsx</div>
+        </div>
+      </div>
+
+      <div class="action-bar">
+        <div class="help" id="error-status" style="color:var(--muted); font-size:12px;">等待文件上传。</div>
+        <button class="btn-primary" id="btn-analyze" type="button" disabled>
+          <span>报错处理</span>
+          <span class="arr">→</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Analysis result -->
+    <div class="panel" id="analysis-panel">
+      <div class="panel-head">
+        <h3>报错分析</h3>
+        <div class="tag">STEP 02 · DETAILS</div>
+      </div>
+      <div class="panel-body">
+        <div class="stats" id="analysis-stats"></div>
+        <div class="coupon-list" id="coupon-breakdown"></div>
+
+        <div class="action-bar">
+          <div class="help" style="color:var(--muted); font-size:12px;">点击下方按钮将批注标注的错误 ASIN 从原清单中剔除，并重新生成优惠券文件。</div>
+          <button class="btn-primary" id="btn-save-clean" type="button">
+            <span>保存处理（重新生成）</span>
+            <span class="arr">→</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Clean output download -->
+    <div class="panel" id="clean-panel">
+      <div class="panel-head">
+        <h3>新优惠券文件</h3>
+        <div class="tag">STEP 03 · OUTPUT</div>
+      </div>
+      <div class="panel-body">
+        <div class="stats" id="clean-stats"></div>
+        <div class="download-strip">
+          <div class="fname" id="clean-fname">—</div>
+          <button class="btn-primary" id="btn-download-clean" type="button">
+            <span>下载文件</span>
+            <span class="arr">↓</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <footer>
+    <div>SELLER COUPON TOOLKIT</div>
+    <div id="footer-date"></div>
+  </footer>
+</div>
+<script>window.__SPC_TEMPLATE_B64__ = "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";</script>
+<script>window.__SPC_EU_TEMPLATE_B64__ = "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";</script>
+<script>
+/* =========================================================
+   Amazon Coupon Generator & Error Handler — v3
+   North America + Europe unified dropdown
+   ========================================================= */
+
+const $ = (id) => document.getElementById(id);
+const ASIN_RE = /^B0[A-Z0-9]{8}$/;
+const PARENT_PREFIXES = new Set(['01','02','03','04','05','06','07','08','09']);
+
+/* ---------- Region detection from dropdown ---------- */
+function getRegion(){
+  const sel = $('f-account-site');
+  const opt = sel.options[sel.selectedIndex];
+  return (opt && opt.dataset.region) || 'NA';
+}
+function getAccountName(){
+  const site = $('f-account-site').value;
+  const id   = ($('f-account-id').value || '101').trim();
+  return site + id;
+}
+
+/* ---------- Template bytes — region-aware ---------- */
+function getTemplateBytes(){
+  const b64 = getRegion() === 'EU'
+    ? window.__SPC_EU_TEMPLATE_B64__
+    : window.__SPC_TEMPLATE_B64__;
+  if(!b64) throw new Error('SPC 模板未嵌入');
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for(let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+
+/* ---------- Small helpers ---------- */
+function pad2(n){ return String(n).padStart(2,'0'); }
+function todayPlus(days){
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+}
+function toISODate(v){
+  if(!v) return '';
+  const d = (v instanceof Date) ? v : new Date(v);
+  if(isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`;
+}
+function setStatus(id, msg, kind='info'){
+  const el = $(id);
+  el.textContent = msg;
+  el.style.color = kind==='error'   ? 'var(--danger)'
+                 : kind==='success' ? 'var(--success)'
+                 : kind==='warn'    ? 'var(--warn)'
+                 : 'var(--muted)';
+}
+function randomCouponName(){
+  const pool = ['SP','PC','GM','NB','TH','OK','KR','DF','ZC','LM'];
+  const pick = pool[Math.floor(Math.random()*pool.length)];
+  const ts = new Date();
+  const mmdd = pad2(ts.getMonth()+1) + pad2(ts.getDate());
+  const hhmm = pad2(ts.getHours()) + pad2(ts.getMinutes());
+  const r = Math.floor(Math.random()*900 + 100);
+  return `${pick}Promo${mmdd}${hhmm}-${r}`;
+}
+function footerDate(){
+  const d = new Date();
+  const m = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][d.getMonth()];
+  $('footer-date').textContent = `${d.getDate()} ${m} ${d.getFullYear()}`;
+}
+footerDate();
+
+function excelSerial(d){
+  if(typeof d === 'string') d = new Date(d + 'T00:00:00');
+  const epoch = Date.UTC(1899,11,30);
+  const local  = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  return Math.floor((local - epoch) / 86400000);
+}
+function xmlEscape(s){
+  return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+}
+
+/* =========================================================
+   STATE
+   ========================================================= */
+const state = {
+  sourceType: 'report',
+  sourceFile: null,
+  reportRecords: [],
+  customAsins: [],
+  lastGeneratedBlob: null,
+  lastGeneratedName: '',
+  errorFile: null,
+  errorCoupons: [],
+  cleanedBlob: null,
+  cleanedName: ''
+};
+
+/* =========================================================
+   TAB SWITCHING
+   ========================================================= */
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    $(tab.dataset.target).classList.add('active');
+  });
+});
+
+/* =========================================================
+   ACCOUNT SITE CHANGE — update budget label + reset file
+   ========================================================= */
+$('f-account-site').addEventListener('change', () => {
+  const isEU = getRegion() === 'EU';
+  $('budget-label').textContent = isEU ? '预算 (EUR)' : '预算 (USD)';
+  $('budget-help').textContent  = isEU ? '最低 €100。' : '最低 $100。';
+  // Reset uploaded file since date format may differ
+  resetSourceFile();
+});
+
+/* =========================================================
+   DEFAULTS
+   ========================================================= */
+function initDefaults(){
+  $('f-start').value = todayPlus(1);
+  $('f-end').value   = todayPlus(31);
+  $('f-name').placeholder = randomCouponName();
+  $('f-budget').min   = 100;
+  $('f-budget').value = 100;
+}
+initDefaults();
+
+/* =========================================================
+   SOURCE TYPE TOGGLE
+   ========================================================= */
+document.querySelectorAll('input[name="source"]').forEach(r => {
+  r.addEventListener('change', (e) => {
+    state.sourceType = e.target.value;
+    resetSourceFile();
+    if(state.sourceType === 'report'){
+      $('drop-source-sub').textContent = '支持 .txt （在售报告）';
+      $('source-help').textContent = '上传亚马逊后台下载的在售商品报告（.txt）。系统会自动剔除父体 ASIN（seller-sku 前两位 01–09）。';
+      $('time-range-field').style.display = '';
+      $('custom-tip').style.display = 'none';
+      $('file-source').accept = '.txt';
+    } else {
+      $('drop-source-sub').textContent = '支持 .xlsx （自定义 ASIN 模板）';
+      $('source-help').textContent = '上传填写完成的 ASIN 模板（.xlsx），系统会对 ASIN 进行去重与格式校验。';
+      $('time-range-field').style.display = 'none';
+      $('custom-tip').style.display = '';
+      $('file-source').accept = '.xlsx';
+    }
+  });
+});
+
+function resetSourceFile(){
+  state.sourceFile = null;
+  state.reportRecords = [];
+  state.customAsins = [];
+  $('file-source').value = '';
+  $('drop-source').classList.remove('has-file');
+  $('drop-source-title').textContent = '点击或拖拽文件到此处';
+  setStatus('status-hint','准备就绪。','info');
+  $('result-panel').classList.remove('show');
+}
+
+$('f-months').addEventListener('change', () => {
+  const val = $('f-months').value;
+  const cdr = $('custom-date-range');
+  const trf = $('time-range-field');
+  if(val === 'custom'){
+    cdr.style.display = 'block';
+    trf.classList.add('full');
+    // 默认预填：from=3个月前，to=今天
+    if(!$('f-date-from').value){
+      const d = new Date();
+      d.setMonth(d.getMonth() - 3);
+      $('f-date-from').value = toISODate(d);
+    }
+    if(!$('f-date-to').value){
+      $('f-date-to').value = toISODate(new Date());
+    }
+  } else {
+    cdr.style.display = 'none';
+    trf.classList.remove('full');
+    if(state.sourceType === 'report' && state.reportRecords.length){
+      const filtered = filterReportByMonths(state.reportRecords, val);
+      const label = val === 'all' ? '全部数据' : `最近 ${val} 个月`;
+      setStatus('status-hint', `${label}下可用 ASIN：${filtered.length} 个（原始 ${state.reportRecords.length} 个）`, 'info');
+    }
+  }
+});
+
+$('btn-apply-daterange').addEventListener('click', () => {
+  const from = $('f-date-from').value;
+  const to   = $('f-date-to').value;
+  if(!from || !to){ setStatus('status-hint','请选择完整的起止日期','warn'); return; }
+  if(new Date(from) > new Date(to)){ setStatus('status-hint','起始日期不能晚于结束日期','warn'); return; }
+  if(state.sourceType === 'report' && state.reportRecords.length){
+    const filtered = filterReportByDateRange(state.reportRecords, from, to);
+    setStatus('status-hint', `${from} 至 ${to}：可用 ASIN ${filtered.length} 个（原始 ${state.reportRecords.length} 个）`, 'success');
+  } else {
+    setStatus('status-hint', `已设置自定义区间：${from} 至 ${to}`, 'info');
+  }
+});
+
+/* =========================================================
+   CUSTOM ASIN TEMPLATE DOWNLOAD
+   ========================================================= */
+$('download-tpl').addEventListener('click', (e) => {
+  e.preventDefault();
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([['ASIN'],['B0XXXXXXXX']]);
+  ws['A1'].c = [{ a:'System', t:'此行不可以删除' }];
+  ws['!cols'] = [{ wch:20 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'ASIN');
+  const out = XLSX.write(wb, { bookType:'xlsx', type:'array' });
+  downloadBlob(new Blob([out], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), 'ASIN_template.xlsx');
+});
+
+/* =========================================================
+   FILE DROP HANDLERS
+   ========================================================= */
+function wireDrop(dropId, inputId, handler){
+  const drop  = $(dropId);
+  const input = $(inputId);
+  drop.addEventListener('click', () => input.click());
+  drop.addEventListener('dragover',  (e) => { e.preventDefault(); drop.style.borderColor='var(--ink)'; });
+  drop.addEventListener('dragleave', ()  => { drop.style.borderColor=''; });
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault(); drop.style.borderColor='';
+    if(e.dataTransfer.files.length) handler(e.dataTransfer.files[0]);
+  });
+  input.addEventListener('change', (e) => {
+    if(e.target.files.length) handler(e.target.files[0]);
+  });
+}
+wireDrop('drop-source', 'file-source', handleSourceFile);
+wireDrop('drop-error',  'file-error',  handleErrorFile);
+
+/* =========================================================
+   SOURCE FILE HANDLING
+   ========================================================= */
+async function handleSourceFile(file){
+  state.sourceFile = file;
+  $('drop-source').classList.add('has-file');
+  $('drop-source-title').textContent = file.name;
+  setStatus('status-hint','正在解析文件…','info');
+  try{
+    if(state.sourceType === 'report'){
+      state.reportRecords = await parseReportFile(file);
+      const mval2 = $('f-months').value;
+      if(mval2 !== 'custom'){
+        const filtered = filterReportByMonths(state.reportRecords, mval2);
+        const label = mval2 === 'all' ? '全部数据' : `最近 ${mval2} 个月`;
+        setStatus('status-hint',
+          `原始有效 ASIN ${state.reportRecords.length} 个（父体已剔除）；${label}筛选后 ${filtered.length} 个`, 'success');
+      } else {
+        setStatus('status-hint',
+          `已读取 ${state.reportRecords.length} 个有效 ASIN（父体已剔除），请设置自定义日期区间后点击「应用」`, 'success');
+      }
+    } else {
+      state.customAsins = await parseCustomFile(file);
+      setStatus('status-hint', `已解析有效 ASIN：${state.customAsins.length} 个`, 'success');
+    }
+  } catch(err){
+    console.error(err);
+    setStatus('status-hint','解析失败：' + (err.message||err), 'error');
+    state.reportRecords = [];
+    state.customAsins   = [];
+  }
+}
+
+/* Parse in-sale report TXT */
+function parseReportFile(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('文件读取失败'));
+    reader.onload  = () => {
+      try{
+        let text = reader.result;
+        if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+        const lines = text.split(/\r?\n/).filter(l => l.length > 0);
+        if(lines.length < 2) throw new Error('文件内容为空或格式错误');
+
+        const header = lines[0].split('\t').map(h => h.trim());
+        const iSku  = header.indexOf('seller-sku');
+        const iAsin = header.indexOf('asin1');
+        const iDate = header.indexOf('open-date');
+        if(iSku < 0 || iAsin < 0) throw new Error('缺少必需字段 seller-sku 或 asin1');
+
+        const isEU = getRegion() === 'EU';
+
+        // pass 1: parent ASINs
+        const parentAsinSet = new Set();
+        for(let i = 1; i < lines.length; i++){
+          const cols = lines[i].split('\t');
+          const sku  = (cols[iSku]  || '').trim();
+          const asin = (cols[iAsin] || '').trim();
+          if(!sku || !asin) continue;
+          if(PARENT_PREFIXES.has(sku.slice(0,2))) parentAsinSet.add(asin);
+        }
+
+        // pass 2: collect child records
+        const byAsin = new Map();
+        for(let i = 1; i < lines.length; i++){
+          const cols    = lines[i].split('\t');
+          const sku     = (cols[iSku]  || '').trim();
+          const asin    = (cols[iAsin] || '').trim();
+          const dateStr = iDate >= 0 ? (cols[iDate] || '').trim() : '';
+          if(!sku || !asin) continue;
+          if(PARENT_PREFIXES.has(sku.slice(0,2))) continue;
+          if(parentAsinSet.has(asin)) continue;
+          if(!ASIN_RE.test(asin)) continue;
+
+          const d = isEU ? parseEUReportDate(dateStr) : parseNAReportDate(dateStr);
+          const existing = byAsin.get(asin);
+          if(!existing){
+            byAsin.set(asin, { asin, openDate: d });
+          } else if(d && (!existing.openDate || d > existing.openDate)){
+            existing.openDate = d;
+          }
+        }
+        resolve(Array.from(byAsin.values()));
+      } catch(e){ reject(e); }
+    };
+    reader.readAsText(file, 'UTF-8');
+  });
+}
+
+/* NA date: YYYY-MM-DD HH:MM:SS PST/... */
+function parseNAReportDate(s){
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(!m) return null;
+  return new Date(parseInt(m[1]), parseInt(m[2])-1, parseInt(m[3]));
+}
+/* EU date: DD/MM/YYYY HH:MM:SS MET/MEST */
+function parseEUReportDate(s){
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if(!m) return null;
+  return new Date(parseInt(m[3]), parseInt(m[2])-1, parseInt(m[1]));
+}
+
+function filterReportByMonths(records, monthsSel){
+  if(monthsSel === 'all' || monthsSel === 'custom') return records.map(r => r.asin);
+  const m = parseInt(monthsSel, 10);
+  if(isNaN(m)) return records.map(r => r.asin);
+  const now    = new Date();
+  const cutoff = new Date(now.getFullYear(), now.getMonth() - m, now.getDate());
+  const out = [];
+  for(const r of records){
+    if(r.openDate && r.openDate >= cutoff) out.push(r.asin);
+  }
+  return out;
+}
+
+function filterReportByDateRange(records, fromStr, toStr){
+  const from = new Date(fromStr + 'T00:00:00');
+  const to   = new Date(toStr  + 'T23:59:59');
+  const out  = [];
+  for(const r of records){
+    if(r.openDate && r.openDate >= from && r.openDate <= to) out.push(r.asin);
+  }
+  return out;
+}
+
+/* Custom ASIN xlsx parser */
+function parseCustomFile(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('文件读取失败'));
+    reader.onload  = () => {
+      try{
+        const data = new Uint8Array(reader.result);
+        const wb   = XLSX.read(data, { type:'array' });
+        const ws   = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
+        if(rows.length < 2) throw new Error('模板为空');
+        const header = (rows[0][0] || '').toString().trim();
+        if(header.toUpperCase() !== 'ASIN') throw new Error('首行必须为 "ASIN"（请勿删除）');
+        const seen = new Set();
+        const out  = [];
+        for(let i = 1; i < rows.length; i++){
+          const raw = (rows[i][0] || '').toString().trim().toUpperCase();
+          if(!raw || !ASIN_RE.test(raw) || seen.has(raw)) continue;
+          seen.add(raw);
+          out.push(raw);
+        }
+        if(!out.length) throw new Error('未检测到有效 ASIN');
+        resolve(out);
+      } catch(e){ reject(e); }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+/* =========================================================
+   FORM UI WIRING
+   ========================================================= */
+$('f-disc-type').addEventListener('change', () => {
+  const isPct = $('f-disc-type').value === '折扣';
+  $('disc-unit').textContent = isPct ? '%' : '$';
+  $('disc-help').textContent = isPct ? '百分比：5–50 之间整数。' : '固定金额：大于 0 的整数。';
+  $('f-disc-value').value = 5;
+});
+$('btn-gen-name').addEventListener('click', () => {
+  $('f-name').value = randomCouponName();
+});
+$('f-start').addEventListener('change', () => {
+  const s = $('f-start').value;
+  if(!s) return;
+  const d = new Date(s + 'T00:00:00');
+  d.setDate(d.getDate() + 30);
+  $('f-end').value = toISODate(d);
+});
+
+/* =========================================================
+   CONFIG BUILDER & VALIDATION
+   ========================================================= */
+function collectConfig(){
+  const cfg = {
+    account:    getAccountName(),
+    region:     getRegion(),
+    sourceType: state.sourceType,
+    months:     $('f-months').value,
+    dateFrom:   $('f-date-from').value,
+    dateTo:     $('f-date-to').value,
+    capacity:   parseInt($('f-capacity').value, 10),
+    discType:   $('f-disc-type').value,
+    discValue:  parseFloat($('f-disc-value').value),
+    name:       $('f-name').value.trim() || randomCouponName(),
+    budget:     parseInt($('f-budget').value, 10),
+    start:      $('f-start').value,
+    end:        $('f-end').value,
+    limitOnce:  $('f-limit-once').value,
+    couponType: $('f-coupon-type').value,
+    audience:   $('f-audience').value,
+    stack:      $('f-stack').value,
+  };
+  if(!(cfg.capacity >= 15 && cfg.capacity <= 2900)) throw new Error('优惠券容量需在 15–2900 之间');
+  if(cfg.discType === '折扣'){
+    if(!(cfg.discValue >= 5 && cfg.discValue <= 50)) throw new Error('折扣百分比需在 5–50 之间');
+  } else {
+    if(!(cfg.discValue > 0)) throw new Error('减免金额需大于 0');
+  }
+  if(cfg.name.length > 80) throw new Error('名称长度超过 80 字符');
+  if(cfg.budget < 100) throw new Error('预算至少 100');
+  if(!cfg.start || !cfg.end) throw new Error('请选择开始与结束日期');
+  if(new Date(cfg.end) < new Date(cfg.start)) throw new Error('结束日期不能早于开始日期');
+  return cfg;
+}
+
+function currentAsinList(){
+  if(state.sourceType === 'report'){
+    if(!state.reportRecords.length) throw new Error('请先上传在售报告');
+    const mval = $('f-months').value;
+    if(mval === 'custom'){
+      const from = $('f-date-from').value;
+      const to   = $('f-date-to').value;
+      if(!from || !to) throw new Error('请先点击「应用」确认自定义日期区间');
+      return filterReportByDateRange(state.reportRecords, from, to);
+    }
+    return filterReportByMonths(state.reportRecords, mval);
+  } else {
+    if(!state.customAsins.length) throw new Error('请先上传自定义 ASIN 模板');
+    return state.customAsins.slice();
+  }
+}
+
+function chunkAsins(asins, capacity){
+  const chunks = [];
+  for(let i = 0; i < asins.length; i += capacity){
+    chunks.push(asins.slice(i, i + capacity));
+  }
+  if(chunks.length > 1 && chunks[chunks.length-1].length < 15){
+    const tail = chunks.pop();
+    chunks[chunks.length-1] = chunks[chunks.length-1].concat(tail);
+  }
+  return chunks;
+}
+
+/* =========================================================
+   THE CLONE-AND-MODIFY XLSX BUILDER
+   ========================================================= */
+async function buildCouponXlsx(couponRows){
+  const tplBytes = getTemplateBytes();
+  const zip = await JSZip.loadAsync(tplBytes);
+
+  let sheetPath = null;
+  zip.forEach((path) => {
+    if(/^xl\/worksheets\/sheet\d+\.xml$/.test(path)) sheetPath = path;
+  });
+  if(!sheetPath) throw new Error('模板中未找到工作表');
+
+  const sheetXml = await zip.files[sheetPath].async('string');
+
+  // Find the end of row 9 (template header rows 1-9 preserved as-is)
+  const row9End = (() => {
+    let idx = 0; let count = 0;
+    while(count < 9){
+      const next = sheetXml.indexOf('</row>', idx);
+      if(next < 0) break;
+      idx = next + 6; count++;
+    }
+    return idx;
+  })();
+
+  const sheetDataEnd = sheetXml.indexOf('</sheetData>');
+  const prefix = sheetXml.slice(0, row9End);
+  const suffix = sheetXml.slice(sheetDataEnd);
+
+  // Build new data rows starting at row 10
+  const newRows = [];
+  let rowNum = 10;
+  for(const c of couponRows){
+    const asinList = c.asins.join(';');
+    const startSerial = excelSerial(c.start);
+    const endSerial   = excelSerial(c.end);
+    // 列顺序与模板第7行表头严格对齐，style ID与模板第10行完全一致：
+    // A/B/E/I/J/K/L: s=27(文本+灰色底)  C: s=28(折扣%格式)
+    // D/F: s=29(金额格式)  G/H: s=30(日期格式)  M/N: s=31(橙色底禁填)
+    const isDiscount = c.discType === '折扣';
+    const colC = isDiscount
+      ? `<c r="C${rowNum}" s="28"><v>${c.discValue / 100}</v></c>`
+      : `<c r="C${rowNum}" s="28" t="inlineStr"><is><t></t></is></c>`;
+    const colD = isDiscount
+      ? `<c r="D${rowNum}" s="29" t="inlineStr"><is><t></t></is></c>`
+      : `<c r="D${rowNum}" s="29"><v>${c.discValue}</v></c>`;
+    newRows.push(`<row r="${rowNum}" spans="1:14" x14ac:dyDescent="0.25">` +
+      `<c r="A${rowNum}" s="27" t="inlineStr"><is><t>${xmlEscape(asinList)}</t></is></c>` +
+      `<c r="B${rowNum}" s="27" t="inlineStr"><is><t>${xmlEscape(c.discType)}</t></is></c>` +
+      colC +
+      colD +
+      `<c r="E${rowNum}" s="27" t="inlineStr"><is><t>${xmlEscape(c.name)}</t></is></c>` +
+      `<c r="F${rowNum}" s="29"><v>${c.budget}</v></c>` +
+      `<c r="G${rowNum}" s="30"><v>${startSerial}</v></c>` +
+      `<c r="H${rowNum}" s="30"><v>${endSerial}</v></c>` +
+      `<c r="I${rowNum}" s="27" t="inlineStr"><is><t>${xmlEscape(c.limitOnce)}</t></is></c>` +
+      `<c r="J${rowNum}" s="27" t="inlineStr"><is><t>${xmlEscape(c.couponType)}</t></is></c>` +
+      `<c r="K${rowNum}" s="27" t="inlineStr"><is><t>${xmlEscape(c.audience)}</t></is></c>` +
+      `<c r="L${rowNum}" s="27" t="inlineStr"><is><t>${xmlEscape(c.stack)}</t></is></c>` +
+      `<c r="M${rowNum}" s="31"/>` +
+      `<c r="N${rowNum}" s="31"/>` +
+      `</row>`);
+    rowNum++;
+  }
+
+  const newSheetXml = prefix + newRows.join('') + suffix;
+  zip.file(sheetPath, newSheetXml);
+
+  // Remove comments (errors cleared)
+  Object.keys(zip.files).forEach(f => {
+    if(/xl\/comments\d+\.xml/i.test(f)) zip.remove(f);
+  });
+
+  return zip.generateAsync({ type:'blob', compression:'DEFLATE' });
+}
+
+/* =========================================================
+   GENERATE BUTTON
+   ========================================================= */
+$('btn-generate').addEventListener('click', async () => {
+  const btn = $('btn-generate');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 处理中…';
+  try{
+    const cfg   = collectConfig();
+    const asins = currentAsinList();
+    if(!asins.length) throw new Error('可用 ASIN 为空，请检查文件或时间范围');
+
+    const chunks = chunkAsins(asins, cfg.capacity);
+    const coupons = chunks.map((chunk, i) => ({
+      asins:      chunk,
+      discType:   cfg.discType,
+      discValue:  cfg.discValue,
+      name:       chunks.length === 1 ? cfg.name : `${cfg.name}_${i+1}`,
+      budget:     cfg.budget,
+      start:      cfg.start,
+      end:        cfg.end,
+      limitOnce:  cfg.limitOnce,
+      couponType: cfg.couponType,
+      audience:   cfg.audience,
+      stack:      cfg.stack
+    }));
+
+    const blob  = await buildCouponXlsx(coupons);
+    const fname = `SPC_${cfg.account.replace(/[^\w.]/g,'_')}_${todayPlus(0).replace(/-/g,'')}_${coupons.length}coupons.xlsx`;
+    state.lastGeneratedBlob = blob;
+    state.lastGeneratedName = fname;
+
+    const totalUsed      = coupons.reduce((s,c) => s + c.asins.length, 0);
+    const totalAvailable = asins.length;
+    const isPct          = cfg.discType === '折扣';
+    const discDisplay    = isPct ? `${cfg.discValue}%` : `${cfg.region==='EU'?'€':'$'}${cfg.discValue}`;
+
+    $('result-stats').innerHTML = `
+      <div class="stat"><div class="k">Account</div><div class="v" style="font-size:18px;">${escapeHtml(cfg.account)}</div></div>
+      <div class="stat"><div class="k">Region</div><div class="v" style="font-size:18px;">${cfg.region==='EU'?'🌍 欧洲':'🌎 北美'}</div></div>
+      <div class="stat"><div class="k">Coupons</div><div class="v">${coupons.length}<span class="unit">张</span></div></div>
+      <div class="stat"><div class="k">ASINs</div><div class="v">${totalUsed}<span class="unit">/ ${totalAvailable}</span></div></div>
+    `;
+
+    let timeRangeLabel;
+    if(cfg.sourceType !== 'report'){
+      timeRangeLabel = '自定义 ASIN';
+    } else if(cfg.months === 'all'){
+      timeRangeLabel = '全部数据';
+    } else if(cfg.months === 'custom'){
+      timeRangeLabel = `${cfg.dateFrom} 至 ${cfg.dateTo}`;
+    } else {
+      timeRangeLabel = `最近 ${cfg.months} 个月`;
+    }
+
+    $('result-meta').innerHTML = `
+      <div class="row"><span class="k">数据源</span><span class="v">${cfg.sourceType==='report'?'在售报告':'自定义 ASIN'}</span></div>
+      <div class="row"><span class="k">时间范围</span><span class="v">${timeRangeLabel}</span></div>
+      <div class="row"><span class="k">折扣类型</span><span class="v">${escapeHtml(cfg.discType)}</span></div>
+      <div class="row"><span class="k">折扣值</span><span class="v">${discDisplay}</span></div>
+      <div class="row"><span class="k">容量</span><span class="v">${cfg.capacity} / 张</span></div>
+      <div class="row"><span class="k">预算</span><span class="v">${cfg.region==='EU'?'€':'$'}${cfg.budget}</span></div>
+      <div class="row"><span class="k">有效期</span><span class="v">${cfg.start} → ${cfg.end}</span></div>
+      <div class="row"><span class="k">优惠券类型</span><span class="v">${escapeHtml(cfg.couponType)}</span></div>
+      <div class="row"><span class="k">目标群体</span><span class="v">${escapeHtml(cfg.audience)}</span></div>
+      <div class="row"><span class="k">限一次 / 叠加</span><span class="v">${cfg.limitOnce} / ${cfg.stack}</span></div>
+    `;
+
+    $('result-fname').textContent = fname;
+    $('result-panel').classList.add('show');
+    $('result-panel').scrollIntoView({ behavior:'smooth', block:'start' });
+  } catch(err){
+    console.error(err);
+    setStatus('status-hint','错误：' + (err.message||err), 'error');
+  } finally{
+    btn.disabled = false;
+    btn.innerHTML = '<span>生成优惠券</span><span class="arr">→</span>';
+  }
+});
+
+$('btn-download').addEventListener('click', () => {
+  if(state.lastGeneratedBlob) downloadBlob(state.lastGeneratedBlob, state.lastGeneratedName);
+});
+
+/* =========================================================
+   ERROR HANDLER — UPLOAD & PARSE
+   ========================================================= */
+async function handleErrorFile(file){
+  state.errorFile = file;
+  $('drop-error').classList.add('has-file');
+  $('drop-error-title').textContent = file.name;
+  $('btn-analyze').disabled = false;
+  setStatus('error-status', `已选择：${file.name}`, 'success');
+  $('analysis-panel').classList.remove('show');
+  $('clean-panel').classList.remove('show');
+}
+
+$('btn-analyze').addEventListener('click', async () => {
+  const btn = $('btn-analyze');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 解析中…';
+  try{
+    if(!state.errorFile) throw new Error('请先上传报错文件');
+    const data = await state.errorFile.arrayBuffer();
+    const zip  = await JSZip.loadAsync(data);
+    const commentsMap = await extractCommentsMap(zip);
+
+    const wb  = XLSX.read(new Uint8Array(data), { type:'array' });
+    const ws  = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
+
+    state.errorCoupons = parseCoupons(rows, commentsMap);
+    renderAnalysis(state.errorCoupons);
+    setStatus('error-status', `解析完成，共 ${state.errorCoupons.length} 条优惠券`, 'success');
+  } catch(err){
+    console.error(err);
+    setStatus('error-status','错误：' + (err.message||err), 'error');
+  } finally{
+    btn.disabled = false;
+    btn.innerHTML = '<span>报错处理</span><span class="arr">→</span>';
+  }
+});
+
+function parseCoupons(rows, commentsMap){
+  const headerRow = rows[6] || [];
+  const findCol = (label) => headerRow.findIndex(h => (h||'').toString().trim() === label.trim());
+  const iAsinList = findCol('ASIN 列表');
+  const iName     = findCol('优惠券名称');
+  const iResult   = findCol('上传结果');
+  const iError    = findCol('错误');
+
+  if(iAsinList < 0 || iName < 0 || iError < 0){
+    throw new Error('文件结构不符：缺少 ASIN 列表 / 优惠券名称 / 错误 列');
+  }
+  const errColLetter = XLSX.utils.encode_col(iError);
+  const coupons = [];
+  for(let r = 9; r < rows.length; r++){
+    const row = rows[r];
+    if(!row || !row.length) continue;
+    const asinListStr = (row[iAsinList] || '').toString().trim();
+    if(!asinListStr) continue;
+    const name        = (row[iName]   || '').toString().trim();
+    const uploadResult = iResult >= 0 ? (row[iResult]||'').toString().trim() : '';
+    const errorText   = (row[iError]  || '').toString().trim();
+    const asins       = asinListStr.split(/[;,\s]+/).filter(Boolean);
+    const cellAddr    = `${errColLetter}${r+1}`;
+    const commentText = commentsMap[cellAddr] || '';
+    const errorAsinMap = parseErrorComment(commentText);
+
+    const categories = {};
+    if(errorAsinMap.size > 0){
+      for(const reasons of errorAsinMap.values()){
+        for(const reason of Array.from(new Set(reasons))){
+          categories[reason] = (categories[reason] || 0) + 1;
+        }
+      }
+    } else if(errorText){
+      categories[errorText] = asins.length;
+    }
+
+    coupons.push({ rowIndex:r, name, uploadResult, errorText, asins,
+      errorAsins: new Set(errorAsinMap.keys()), errorDetail: errorAsinMap, categories });
+  }
+  if(!coupons.length) throw new Error('未读取到任何优惠券记录（第 10 行起为空）');
+  return coupons;
+}
+
+async function extractCommentsMap(zip){
+  const out = {};
+  const commentFiles = Object.keys(zip.files).filter(n => /xl\/comments\d+\.xml$/i.test(n));
+  for(const cf of commentFiles){
+    const xml = await zip.files[cf].async('string');
+    const doc = new DOMParser().parseFromString(xml, 'text/xml');
+    for(const c of Array.from(doc.getElementsByTagName('comment'))){
+      const ref = c.getAttribute('ref');
+      if(!ref) continue;
+      let combined = '';
+      for(const t of Array.from(c.getElementsByTagName('t'))) combined += t.textContent;
+      out[ref] = combined.trim();
+    }
+  }
+  return out;
+}
+
+function parseErrorComment(text){
+  const m = new Map();
+  if(!text) return m;
+  const blocks = text.split(/\n\s*\n/).map(b => b.trim()).filter(Boolean);
+  for(const block of blocks){
+    const lines = block.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if(!lines.length) continue;
+    const asinMatch = lines[0].match(/\b(B0[A-Z0-9]{8})\b/);
+    if(!asinMatch) continue;
+    const asin    = asinMatch[1];
+    const reasons = lines.slice(1).filter(l => l.length > 0);
+    if(m.has(asin)) m.get(asin).push(...reasons);
+    else m.set(asin, reasons.length ? reasons : ['未说明']);
+  }
+  return m;
+}
+
+function renderAnalysis(coupons){
+  const totalCoupons = coupons.length;
+  const totalAsins   = coupons.reduce((s,c) => s + c.asins.length, 0);
+  const totalErrors  = coupons.reduce((s,c) => s + c.errorAsins.size, 0);
+  const withErrors   = coupons.filter(c => c.errorAsins.size > 0).length;
+
+  $('analysis-stats').innerHTML = `
+    <div class="stat"><div class="k">Coupons</div><div class="v">${totalCoupons}</div></div>
+    <div class="stat"><div class="k">Total ASINs</div><div class="v">${totalAsins}</div></div>
+    <div class="stat"><div class="k">Error ASINs</div><div class="v" style="color:var(--danger);">${totalErrors}</div></div>
+    <div class="stat"><div class="k">Affected</div><div class="v">${withErrors}<span class="unit">/ ${totalCoupons}</span></div></div>
+  `;
+
+  const rows = [`
+    <div class="row head">
+      <div>优惠券名称</div><div>上传 ASIN</div><div>错误 ASIN</div><div>错误类型分类</div>
+    </div>
+  `];
+  coupons.forEach((c, i) => {
+    const catsHtml = Object.keys(c.categories).length
+      ? Object.entries(c.categories).sort((a,b)=>b[1]-a[1])
+          .map(([type,n]) => `<span class="errtag">${escapeHtml(truncate(type,22))}<span class="n">${n}</span></span>`)
+          .join('')
+      : `<span class="errtag none">无错误</span>`;
+    rows.push(`
+      <div class="row">
+        <div class="name" title="${escapeHtml(c.name)}">${escapeHtml(c.name||`#${i+1}`)}</div>
+        <div class="count">${c.asins.length}</div>
+        <div class="count ${c.errorAsins.size>0?'err':''}">${c.errorAsins.size}</div>
+        <div class="errs">${catsHtml}</div>
+      </div>
+    `);
+  });
+  $('coupon-breakdown').innerHTML = rows.join('');
+  $('analysis-panel').classList.add('show');
+  $('analysis-panel').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+/* =========================================================
+   SAVE/CLEAN — regenerate using SPC_Template as base.
+   ========================================================= */
+$('btn-save-clean').addEventListener('click', async () => {
+  const btn = $('btn-save-clean');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 处理中…';
+  try{
+    if(!state.errorCoupons.length) throw new Error('请先上传并解析报错文件');
+
+    const cleaned = [];
+    let totalRemoved = 0;
+    for(const c of state.errorCoupons){
+      const kept = c.asins.filter(a => !c.errorAsins.has(a));
+      totalRemoved += (c.asins.length - kept.length);
+      if(!kept.length) continue;
+      cleaned.push({ name: c.name || randomCouponName(), asins: kept });
+    }
+    if(!cleaned.length) throw new Error('剔除错误 ASIN 后没有可用数据');
+
+    const cfg = readCurrentCouponCfg();
+    const coupons = cleaned.map(r => ({
+      asins: r.asins, discType: cfg.discType, discValue: cfg.discValue,
+      name: r.name, budget: cfg.budget, start: cfg.start, end: cfg.end,
+      limitOnce: cfg.limitOnce, couponType: cfg.couponType,
+      audience: cfg.audience, stack: cfg.stack
+    }));
+
+    const blob  = await buildCouponXlsx(coupons);
+    const fname = `SPC_cleaned_${todayPlus(0).replace(/-/g,'')}_${coupons.length}coupons.xlsx`;
+    state.cleanedBlob = blob;
+    state.cleanedName = fname;
+
+    $('clean-stats').innerHTML = `
+      <div class="stat"><div class="k">Coupons</div><div class="v">${coupons.length}</div></div>
+      <div class="stat"><div class="k">ASINs (kept)</div><div class="v">${coupons.reduce((s,c)=>s+c.asins.length,0)}</div></div>
+      <div class="stat"><div class="k">Removed</div><div class="v" style="color:var(--accent-warm);">${totalRemoved}</div></div>
+      <div class="stat"><div class="k">Status</div><div class="v" style="font-size:16px;color:var(--success);">Ready</div></div>
+    `;
+    $('clean-fname').textContent = fname;
+    $('clean-panel').classList.add('show');
+    $('clean-panel').scrollIntoView({ behavior:'smooth' });
+  } catch(err){
+    console.error(err);
+    setStatus('error-status','错误：' + (err.message||err), 'error');
+  } finally{
+    btn.disabled = false;
+    btn.innerHTML = '<span>保存处理（重新生成）</span><span class="arr">→</span>';
+  }
+});
+
+$('btn-download-clean').addEventListener('click', () => {
+  if(state.cleanedBlob) downloadBlob(state.cleanedBlob, state.cleanedName);
+});
+
+function readCurrentCouponCfg(){
+  const discType  = $('f-disc-type').value;
+  const discValue = parseFloat($('f-disc-value').value);
+  if(discType === '折扣'){
+    if(!(discValue >= 5 && discValue <= 50)) throw new Error('折扣百分比需在 5–50 之间');
+  } else {
+    if(!(discValue > 0)) throw new Error('减免金额需大于 0');
+  }
+  const start  = $('f-start').value || todayPlus(1);
+  const end    = $('f-end').value   || todayPlus(31);
+  const budget = parseInt($('f-budget').value, 10);
+  if(!(budget >= 100)) throw new Error('预算至少 100');
+  return {
+    discType, discValue, budget, start, end,
+    limitOnce:  $('f-limit-once').value,
+    couponType: $('f-coupon-type').value,
+    audience:   $('f-audience').value,
+    stack:      $('f-stack').value
+  };
+}
+
+/* =========================================================
+   HELPERS
+   ========================================================= */
+function downloadBlob(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 100);
+}
+function escapeHtml(s){
+  return (s==null?'':String(s))
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function truncate(s, n){
+  s = String(s||'');
+  return s.length > n ? s.slice(0,n-1) + '…' : s;
+}
+
+</script>
+</body>
+</html>
